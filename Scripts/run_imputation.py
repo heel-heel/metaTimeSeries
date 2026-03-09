@@ -8,20 +8,20 @@ Imputation_Algorithms = {
     #'KNN': 'KNN.py',
     #'HDI': 'HDI.py',
     #'MICE': 'MICE.py',
-    'IIM': 'IIM.py',
+    #'IIM': 'IIM.py',
     #'SI': 'SI.py',
     #'MFI': 'MFI.py',
     #'MissFI': 'MissFI.py',
     #'XGBI': 'XGBI.py',
     #'GAIN': 'GAIN.py',
-    #'MIDAE': 'MIDAE.py'
+    'MIDAE': 'MIDAE.py'
 }
 script_base_path = "../Imputation_Algorithms"
 datasets = {
     "Illness": {"time_column": "date", "target_column": "OT"},
 }
 #Missing_rate = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95]
-Missing_rate = [90]
+Missing_rate = [5]
 base_path = "../Datasets"
 
 def run_imputation(input_path, output_path, target_column, time_column, method, rate):

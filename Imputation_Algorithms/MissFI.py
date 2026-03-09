@@ -1,70 +1,142 @@
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
 import numpy as np
 import sys
 
-def process_and_fill(input_file, output_file, target_column, nonnumerical_column):
+
+def process_and_fill(input_file, output_file, target_column, time_column):
+    # 读取数据
     df = pd.read_csv(input_file)
-    if nonnumerical_column != "None":
-        nonnumerical_data = df[nonnumerical_column].copy()
-        df.drop(nonnumerical_column, axis=1, inplace=True)
 
+    # 处理非数值列
+    if time_column != "None":
+        nonnumerical_data = df[time_column].copy()
+        df = df.drop(columns=[time_column])
+    else:
+        nonnumerical_data = None
 
-    mask = df[target_column].isnull()
-    df_incomplete = df[mask]
-    df_complete = df[~mask]
+    # 转换为numpy数组便于处理
+    X_original = df.values
+    n_samples, n_features = X_original.shape
 
-    X_train_initial = df_complete.drop(target_column, axis=1)
-    y_train_initial = df_complete[target_column]
-    X_test_initial = df_incomplete.drop(target_column, axis=1)
+    # 创建缺失值掩码 M (1表示观察到的值，0表示缺失值)
+    missing_mask = np.isnan(X_original)
+    M = (~missing_mask).astype(int)
 
-    rfc_initial = RandomForestRegressor(n_estimators=100, random_state=42)
-    rfc_initial.fit(X_train_initial, y_train_initial)
-    y_pred_initial = rfc_initial.predict(X_test_initial)
-    df.loc[mask, target_column] = y_pred_initial
+    print(f"原始数据形状: {X_original.shape}")
+    print(f"每列缺失值数量: {np.sum(missing_mask, axis=0)}")
+    print(f"总缺失值数量: {np.sum(missing_mask)}")
 
-    previous_imputed_values = df[target_column].copy()
-    average_difference = 0
-    iteration = 0
-    max_iterations = 100
+    # Step 1: 用均值填充初始化 X^0
+    X_imputed = X_original.copy()
+    col_means = np.nanmean(X_original, axis=0)
+    for j in range(n_features):
+        mask = missing_mask[:, j]
+        X_imputed[mask, j] = col_means[j]
 
-    # Modify because there are only missing values in one attribute, making the iterative process meaningless,
-    # so change to iteration between each tuple
-    while iteration < max_iterations:
-        current_imputed_values = df[target_column].copy()
-        for index, row in df_incomplete.iterrows():
-            print(f"Processing {index}...")
-            df_temp = df.drop(index)
-            X_train = df_temp.drop(target_column, axis=1)
-            y_train = df_temp[target_column]
-            X_test = pd.DataFrame([row.drop(target_column)], columns=X_train.columns)
+    print("\n初始均值填充完成")
 
-            rfc = RandomForestRegressor(n_estimators=100, random_state=42)
-            rfc.fit(X_train, y_train)
-            y_pred = rfc.predict(X_test)
-            df.loc[index, target_column] = y_pred[0]
+    # 保存列名
+    column_names = df.columns.tolist()
 
-        current_difference = np.mean(np.abs(df[target_column] - previous_imputed_values))
-        print(f"Iteration {iteration + 1}: {current_difference},{average_difference}")
+    # 迭代参数
+    cmax = 100
+    c = 0
+    previous_X = X_imputed.copy()
 
-        if iteration > 1 and current_difference > average_difference:
-            print("Stopping criterion met: average difference increased.")
-            df[target_column] = previous_imputed_values
-            break
+    # 记录每列缺失值的索引，避免重复计算
+    missing_cols = [j for j in range(n_features) if np.sum(missing_mask[:, j]) > 0]
 
-        previous_imputed_values = current_imputed_values
-        average_difference = current_difference
-        iteration += 1
+    print(f"\n需要填充的列: {[column_names[j] for j in missing_cols]}")
 
-    if nonnumerical_column != "None":
-        df = pd.concat([nonnumerical_data.to_frame(), df], axis=1)
-        df.columns.values[0] = nonnumerical_column
-    df.to_csv(output_file, index=False)
-    print(f'{output_file} has been saved.')
+    # 主循环
+    while c < cmax:
+        c += 1
+        print(f"\n==================== 迭代 {c}/{cmax} ====================")
+
+        # X^c = X^{c-1} (复制当前填充结果)
+        X_current = X_imputed.copy()
+
+        # 对每个有缺失值的特征进行填充
+        for fj in missing_cols:
+            feature_name = column_names[fj]
+            missing_idx = np.where(missing_mask[:, fj])[0]  # 当前列缺失值的行索引
+            observed_idx = np.where(~missing_mask[:, fj])[0]  # 当前列观察值的行索引
+
+            print(f"\n处理特征 '{feature_name}': {len(missing_idx)} 个缺失值")
+
+            if len(observed_idx) < 2:  # 如果观察值太少，跳过
+                print(f"  警告: 特征 '{feature_name}' 观察值不足，跳过")
+                continue
+
+            # 准备训练数据：使用当前填充的X^c中对应行的所有特征
+            X_train = X_current[observed_idx, :]  # 所有特征
+            X_train = np.delete(X_train, fj, axis=1)  # 删除当前特征列
+
+            y_train = X_current[observed_idx, fj]  # 当前特征作为目标
+
+            # 准备测试数据：缺失值所在行的所有其他特征
+            X_test = X_current[missing_idx, :]
+            X_test = np.delete(X_test, fj, axis=1)  # 删除当前特征列
+
+            # 训练决策树模型 (使用决策树，符合伪代码)
+            # 也可以使用随机森林，但伪代码指定的是决策树
+            #dt = DecisionTreeRegressor(max_depth=5, random_state=42)
+            # 或者使用随机森林（通常效果更好）
+            dt = RandomForestRegressor(n_estimators=100, random_state=42)
+
+            dt.fit(X_train, y_train)
+
+            # 预测缺失值
+            y_pred = dt.predict(X_test)
+
+            # 更新X_current中的缺失值
+            X_current[missing_idx, fj] = y_pred
+
+            print(f"  填充完成，预测值范围: [{np.min(y_pred):.4f}, {np.max(y_pred):.4f}]")
+
+        # 计算新旧填充值的平均差异
+        diff = np.mean(np.abs(X_current[missing_mask] - X_imputed[missing_mask]))
+        print(f"\n迭代 {c} 的平均差异: {diff:.6f}")
+
+        # 检查停止条件：差异第一次增加
+        if c > 1:
+            if diff > prev_diff:
+                print(f"\n停止条件触发: 当前差异({diff:.6f}) > 前次差异({prev_diff:.6f})")
+                print(f"使用前次迭代的结果 (X^{c - 1})")
+                X_imputed = previous_X  # 恢复到前次迭代的结果
+                break
+
+        # 更新
+        previous_X = X_imputed.copy()
+        X_imputed = X_current.copy()
+        prev_diff = diff
+
+    if c == cmax:
+        print(f"\n达到最大迭代次数 {cmax}")
+
+    # 将结果转换回DataFrame
+    imputed_df = pd.DataFrame(X_imputed, columns=column_names)
+
+    # 重新添加非数值列
+    if nonnumerical_data is not None:
+        imputed_df.insert(0, time_column, nonnumerical_data.values)
+
+    # 保存结果
+    imputed_df.to_csv(output_file, index=False)
+
+    print(f"\n填充完成统计:")
+    print(f"总迭代次数: {c}")
+    print(f"原始数据范围: [{np.nanmin(X_original):.2f}, {np.nanmax(X_original):.2f}]")
+    print(f"填充后数据范围: [{np.min(X_imputed):.2f}, {np.max(X_imputed):.2f}]")
+    print(f"总缺失值数量: {np.sum(missing_mask)}")
+    print(f'\n{output_file} has been saved.')
+
 
 if __name__ == "__main__":
     input_file = sys.argv[1]
     output_file = sys.argv[2]
     target_column = sys.argv[3]
-    nonnumerical_column = sys.argv[4]
-    process_and_fill(input_file, output_file, target_column, nonnumerical_column)
+    time_column = sys.argv[4]
+    process_and_fill(input_file, output_file, target_column, time_column)
